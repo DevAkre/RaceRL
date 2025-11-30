@@ -11,29 +11,31 @@ import logging
 def train(n_episodes: int = 500, render_mode: Optional[str] = None, track: str = 'circle'): 
     # Training hyperparameters
     learning_rate = 0.01        # How fast to learn (higher = faster but less stable)
-    milestone_num = 100       # Print milestone stats every N episodes
-    start_epsilon = 1.0        # Start with full exploration        
-    epsilon_decay = start_epsilon/(n_episodes/8)  # Reduce exploration over time
+    milestone_num = 10       # Print milestone stats every N episodes
+    start_epsilon = 0.5        # Start with full exploration        
+    epsilon_decay = start_epsilon/(n_episodes/2)  # Reduce exploration over time
     final_epsilon = 0.05         # Always keep some exploration
-    gamma = 0.99                 # Discount factor for future rewards
+    gamma = 0.999                 # Discount factor for future rewards
+    lidar_bins = [0.0, 2.5, 5.0]
+    num_velocity_bins = 3
+    num_acceleration_bins = 0  # No acceleration bins
+    env_data={'lidar_bins': lidar_bins, 'num_velocity_bins': num_velocity_bins, 'num_acceleration_bins': num_acceleration_bins}
 
     scenario = 'config/scenarios/' + track + '.yml'
-    # Template environment used only for agent initialization (not used for stepping)
+    # Init single environment
     env = gym.make(
         id='SingleAgentRaceEnv-v0', 
         scenario=scenario,
         vehicle_config_path='config/vehicles/racecar.yml',
-        render_mode=render_mode
+        render_mode='human'
     )
-    env.metadata['render_fps'] = 1
-    env = wrapper.DiscreteActionWrapper(env, num_bins_motor=3, num_bins_steering=5)
-    env = wrapper.DiscretizeObservationWrapper(env, lidar_bins=[0, 2.5, 5.0], num_velocity_bins=3, num_acceleration_bins=0)
+    env = wrapper.DiscreteAction(env, num_bins_motor=3, num_bins_steering=5)
+    env = wrapper.FlattenAction(env)
+    env = wrapper.DiscretizeObservation(env, lidar_bins, num_velocity_bins, num_acceleration_bins)
+    env = wrapper.FlattenObservation(env)
     #Episode Statictics 
     env = gym.wrappers.RecordEpisodeStatistics(env, buffer_length=n_episodes)
     env.reset()
-    action = env.action_space.sample()
-    print(env.step(action))
-
     # Get State and Action spaces
     print(f"Observation space: {env.observation_space}")
     print(f"Action space: {env.action_space}")
@@ -46,27 +48,28 @@ def train(n_episodes: int = 500, render_mode: Optional[str] = None, track: str =
         final_epsilon=final_epsilon,
         discount_factor=gamma
     )
+    # Optionally load a pre-trained model to continue training
+    agent.load('models/circle_aggresive_v1.pkl')
 
     pbar = tqdm(total=n_episodes)
 
     print(f"Starting training for {n_episodes} episodes")
-
+    progress = []
+    time_to_finish = []
     for ep in range(n_episodes):
         done = False
+
         obs, info = env.reset(options=dict(mode='grid'))
 
         while not done:
             action = agent.get_action(obs)
             next_obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
+            if done:
+                progress.append(min(info['progress']+info['lap']-1,1))
             agent.update(obs, action, float(reward), done, next_obs)
             obs = next_obs
-            if render_mode != None and render_mode == 'human':
-                env.render()
-                print(f"Observation: {obs}, Action: {action}, Reward: {reward}, Done: {done}")
-                sleep(0.01)  # Small delay to make rendering visible
             # Log episode statistics (available in info after episode ends)
-        
         if "episode" in info:
                 episode_data = info["episode"]
                 logging.info(f"Episode {ep}: "
@@ -82,12 +85,16 @@ def train(n_episodes: int = 500, render_mode: Optional[str] = None, track: str =
                         avg_recent = sum(recent_rewards) / len(recent_rewards)
                         print(f"  -> Average reward over last 100 episodes: {avg_recent:.1f}")
                         print(f"  -> Epsilon: {agent.epsilon:.3f}")
+                    recent_progress = progress[-milestone_num:]
+                    if recent_progress:
+                        avg_progress = sum(recent_progress) / len(recent_progress)
+                        print(f"  -> Average progress over last {milestone_num} episodes: {avg_progress:.4f}")
         # Decay epsilon
         agent.decay_epsilon()
         pbar.update(1)
     
     pbar.close()
-    return env, agent
+    return env, agent, env_data
 
 # Average reward graph
 def plot_avg_rewards(env):
@@ -118,17 +125,32 @@ def plot_avg_rewards(env):
     plt.grid(True, alpha=0.3)
     plt.show()
 
-def save_agent(agent, path: str):
+def save_agent(agent, path: str, env_data: Optional[dict] = None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # Check if extension is .pkl
     if not path.endswith('.pkl'):
         path += '.pkl'
+    # Rename if file exists
+    if os.path.exists(path):
+        base, ext = os.path.splitext(path)
+        count = 1
+        new_path = f"{base}_v{count}{ext}"
+        while os.path.exists(new_path):
+            count += 1
+            new_path = f"{base}_v{count}{ext}"
+        path = new_path
     agent.save(path)
+    env_data_path = path.replace('.pkl', '_env_data.pkl')
+    if env_data is not None:
+        with open(env_data_path, "wb") as f:
+            import pickle
+            pickle.dump(env_data, f)
     print(f"Saved trained agent to {path}")
+    print(f"Saved environment data to {env_data_path}")
 
 def main(n_episodes: int = 500, render_mode: Optional[str] = None, track: str = 'circle', save_path: str = 'models/q_table.pkl'):
-    env, agent = train(n_episodes=n_episodes, render_mode=render_mode, track=track)
-    save_agent(agent, save_path)
+    env, agent, env_data = train(n_episodes=n_episodes, render_mode=render_mode, track=track)
+    save_agent(agent, save_path, env_data)
     plot_avg_rewards(env)
 
 if __name__ == '__main__':
@@ -137,5 +159,6 @@ if __name__ == '__main__':
     parser.add_argument('--track', '-t', default='circle', help='Track to run the model on (e.g., austria, berlin, circle)')
     parser.add_argument('--episodes', '-e', type=int, default=500, help='Number of episodes to run')
     parser.add_argument('--save-path', '-s', type=str, default='models/q_table.pkl', help='Path to save the trained model')
+    parser.add_argument('--render-mode', '-r', type=str, default=None, help='Render mode for the environment (e.g., None, human, rgb_array_follow, rgb_array_birds_eye)')
     args = parser.parse_args()
     main(n_episodes=args.episodes, track=args.track, save_path= args.save_path)

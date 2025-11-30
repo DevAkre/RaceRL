@@ -2,7 +2,7 @@ from collections import defaultdict
 import gymnasium as gym
 import numpy as np
 import pickle
-from typing import Any, Callable, Hashable, Optional, Tuple
+from typing import Any, Callable, Hashable, Optional, Tuple, Union
 from typing import Dict as TypingDict, List
 import math
 
@@ -11,20 +11,17 @@ class RacecarAgent:
     """Base class for racecar agents.
 
     This class holds shared configuration and provides an interface that
-    concrete agents should implement. It also provides a very small
-    discretizer helper suitable for turning continuous observations into
-    hashable states for tabular methods.
+    concrete agents should implement.
     """
 
     def __init__(
         self,
-        env: gym.Env,
+        env: Union[gym.Env, gym.vector.VectorEnv],
         learning_rate: float = 0.1,
         initial_epsilon: float = 1.0,
         epsilon_decay: float = 1e-3,
         final_epsilon: float = 0.1,
         discount_factor: float = 0.95,
-        discretizer: Optional[Callable[[Any], Hashable]] = None,
         batch_size: int = 1
     ) -> None:
         self.env = env
@@ -37,184 +34,23 @@ class RacecarAgent:
         self.epsilon_decay = epsilon_decay
         self.final_epsilon = final_epsilon
 
-        # Optional discretizer: maps raw obs -> hashable state key
-        # If not provided, a default coarse discretizer will be used.
-        self.discretizer = discretizer or self.default_discretizer
-
-        # Action-space helpers (support Dict of Discrete subspaces)
-        self._action_is_dict = False
-        self._action_keys: List[str] = []
-        self._action_sizes: List[int] = []
-        self._action_multipliers: List[int] = []
-        self._flat_action_n: Optional[int] = None
-        # Setup action mapping from the environment's action_space
-        try:
-            self._setup_action_space()
-        except Exception:
-            # If action space isn't discrete or is unknown, leave as None and let
-            # concrete agents validate if they require discrete actions.
-            self._flat_action_n = None
-        self.num_actions = self._flat_action_n
+        # Validate if action space is flat and Discrete
+        if not self.set_up_action_space():
+            raise ValueError("Environment action space must be discrete")
         self.num_states = None  # To be set by concrete agents if needed
     
-
-    # Helper to set up internal flat action count and mapping multipliers
-    def _setup_from_env_space(self, space) -> int:
-        # Single Discrete space
-        n = getattr(space, "n", None)
-        if n is not None:
-            return int(n)
-
-        # Dict space: expect subspaces to be Discrete
-        if hasattr(space, "spaces") and isinstance(space.spaces, dict):
-            self._action_is_dict = True
-            self._action_keys = list(space.spaces.keys())
-            sizes = []
-            for k in self._action_keys:
-                sub = space.spaces[k]
-                sub_n = getattr(sub, "n", None)
-                if sub_n is None:
-                    raise ValueError("RLAgent requires Discrete subspaces in Dict action space")
-                sizes.append(int(sub_n))
-            self._action_sizes = sizes
-            # flat action count is product of subspace sizes
-            return int(math.prod(sizes))
-
-        raise ValueError("RLAgent requires a discrete action space or Dict of Discrete subspaces")
-
-    def _setup_action_space(self) -> None:
-        """Inspect self.env.action_space and prepare mapping helpers.
-
-        Supports a single Discrete action space or a gym.spaces.Dict of Discrete
-        subspaces. Computes flat action count and multipliers for index math.
-        """
-        space = getattr(self.env, "action_space", None)
-        if space is None:
-            raise ValueError("Environment has no action_space")
-        
+    def set_up_action_space(self) -> bool:
+        """Check if the environment's action space is supported (Discrete or Dict of Discrete)."""
+        action_space = self.env.action_space
         if self.batch_size == 1:
-            self._setup_single_action_space(space)
-            return
-        else:
-            # For batch_size > 1, expect Tuple of action spaces
-            if not (hasattr(space, "spaces") and isinstance(space.spaces, (list, tuple, Tuple))):
-                raise ValueError("For batch_size > 1, environment action_space must be a Tuple of action spaces")
-            # Setup based on the single_env's action space
-            single_env = getattr(self.env, "single_env", None)
-            single_space = getattr(single_env, "action_space", None)
-            print(single_space)
-            if single_space is None:
-                raise ValueError("Vectorized environment has no single_env.action_space")
-            self._setup_single_action_space(single_space)
-
-    def _setup_single_action_space(self, space) -> None:
-        # Single Discrete
-        n = getattr(space, "n", None)
-        if n is not None:
-            self._action_is_dict = False
-            self._flat_action_n = int(n)
-            self._action_keys = []
-            self._action_sizes = []
-            self._action_multipliers = []
-            return
-
-        # Dict of Discrete subspaces
-        if hasattr(space, "spaces") and isinstance(getattr(space, "spaces"), dict):
-            self._action_is_dict = True
-            self._action_keys = list(space.spaces.keys())
-            sizes: List[int] = []
-            for k in self._action_keys:
-                sub = space.spaces[k]
-                sub_n = getattr(sub, "n", None)
-                if sub_n is None:
-                    raise ValueError("QLearningRacecarAgent requires Discrete subspaces in Dict action space")
-                sizes.append(int(sub_n))
-            self._action_sizes = sizes
-            # flat action count is product of subspace sizes
-            self._flat_action_n = int(math.prod(self._action_sizes))
-
-            # multipliers: product of sizes for subsequent dims
-            multipliers: List[int] = []
-            for i in range(len(self._action_sizes)):
-                if i + 1 < len(self._action_sizes):
-                    multipliers.append(int(math.prod(self._action_sizes[i + 1 :])))
-                else:
-                    multipliers.append(1)
-            self._action_multipliers = multipliers
-            return
-
-        raise ValueError("Environment action space must be Discrete or Dict of Discrete subspaces")
-
-    def _flat_index_to_action(self, index: int):
-        """Convert a flat integer index into an action accepted by the env.
-
-        Returns either an int (for single Discrete) or a dict mapping subspace
-        names to indices for Dict action spaces.
-        """
-        if self._flat_action_n is None:
-            raise ValueError("Action mapping not set up for this agent")
-
-        if not self._action_is_dict:
-            return int(index)
-
-        idx = int(index)
-        result = {}
-        for key, size, mult in zip(self._action_keys, self._action_sizes, self._action_multipliers):
-            comp = idx // mult
-            result[key] = int(comp % size)
-            idx = idx - comp * mult
-        return result
-
-    def _action_to_flat_index(self, action) -> int:
-        """Convert an env-format action (int, dict, or sequence) into a flat index."""
-        if self._flat_action_n is None:
-            raise ValueError("Action mapping not set up for this agent")
-
-        if not self._action_is_dict:
-            return int(action)
-
-        try:
-            if isinstance(action, dict):
-                indices = [int(action[k]) for k in self._action_keys]
-            else:
-                indices = [int(x) for x in action]
-        except Exception as e:
-            raise ValueError(f"Action must be a mapping with keys: {self._action_keys}") from e
-
-        flat = 0
-        for ind, mult, size in zip(indices, self._action_multipliers, self._action_sizes):
-            clamped = max(0, min(ind, size - 1))
-            flat += int(clamped) * int(mult)
-        return int(flat)
-
-    def default_discretizer(self, obs: Any) -> Hashable:
-        """Default discretizations:
-        1. Round numeric observations to 2 decimals
-        2. Convert list/tuple/ndarray observations to tuple of rounded values
-        3. Convert dict observations to tuple of (key, rounded value) pairs
-        """
-        if isinstance(obs, (int, float, np.number)):
-            return round(float(obs), 2)
-
-        if isinstance(obs, (list, tuple, np.ndarray)):
-            arr = np.asarray(obs, dtype=float)
-            return tuple(np.round(arr, 2).tolist())
-        
-        if isinstance(obs, dict):
-            items = []
-            for k in sorted(obs.keys()):
-                v = obs[k]
-                if isinstance(v, (int, float, np.number)):
-                    items.append((k, round(float(v), 2)))
-                elif isinstance(v, (list, tuple, np.ndarray)):
-                    arr = np.asarray(v, dtype=float)
-                    items.append((k, tuple(np.round(arr, 2).tolist())))
-                else:
-                    items.append((k, v))
-            return tuple(items)
-
-        # Fallback to using the observation as-is if it's already hashable
-        return obs
+            if isinstance(action_space, gym.spaces.Discrete):
+                self.num_actions = action_space.n
+        elif self.batch_size > 1:
+            if isinstance(action_space, gym.spaces.MultiDiscrete):
+                self.num_actions = max(action_space.nvec)
+        if self.num_actions is not None:
+            return True
+        return False
 
     def get_action(self, obs: Any) -> Any:
         """Return an action given an observation. Must be implemented by subclasses."""
@@ -252,7 +88,7 @@ class QLearningRacecarAgent(RacecarAgent):
 
     def __init__(
         self,
-        env: gym.Env,
+        env: Union[gym.Env, gym.vector.VectorEnv],
         learning_rate: float = 0.1,
         initial_epsilon: float = 1.0,
         epsilon_decay: float = 1e-3,
@@ -269,39 +105,41 @@ class QLearningRacecarAgent(RacecarAgent):
             discount_factor=discount_factor,
             batch_size=batch_size
         )
-        self.batch_size = batch_size
-        action_n = self._flat_action_n
-        if action_n is None:
+        if self.num_actions is None:
             raise ValueError("QLearningRacecarAgent requires a discrete action space or Dict of Discrete subspaces")
         # Use captured action_n inside the defaultdict to avoid static type issues
-        self.q_values = defaultdict(lambda: np.zeros(action_n))
-        self.training_error = []
-        # precompute multipliers for flattening indices if dict action
-        if self._action_is_dict:
-            # multipliers[i] = product of sizes for subsequent dims
-            multipliers = []
-            for i in range(len(self._action_sizes)):
-                if i + 1 < len(self._action_sizes):
-                    multipliers.append(int(math.prod(self._action_sizes[i + 1 :])))
-                else:
-                    multipliers.append(1)
-            self._action_multipliers = multipliers
-
+        self.q_values = defaultdict(lambda: np.zeros(self.num_actions))
+        self.action_space = gym.spaces.Discrete(self.num_actions)
+    
     def get_action(self, obs: Any, explore: bool = True) -> Any:
-        state = self.discretizer(obs)
+        """Return an action for the given observation using epsilon-greedy policy.
 
-        # Epsilon-greedy
-        if explore and np.random.random() < self.epsilon:
-            sample = self.env.action_space.sample()
-            # sample may be dict for Dict action space; return as-is
-            return sample
-
-        flat = int(np.argmax(self.q_values[state]))
-        # Convert flat index into environment action format
-        return self._flat_index_to_action(flat)
+        Args:
+            obs: The current observation (state).
+            explore: If True, use epsilon-greedy exploration; otherwise, exploit.
+        Returns:
+            The selected action.
+        """
+        if self.batch_size == 1:
+            return self._get_action_single(obs, explore)
+        elif self.batch_size > 1:
+            actions = np.empty(self.batch_size, dtype=object)
+            for i in range(self.batch_size):
+                actions[i] = self._get_action_single(obs[i], explore)
+            return actions
+    
+    def _get_action_single(self, obs: Any, explore: bool = True) -> Any:
+        if explore and np.random.rand() < self.epsilon:
+            # Explore: random action
+            action = self.action_space.sample()
+        else:
+            # Exploit: best known action
+            q_vals = self.q_values[obs]
+            action = np.argmax(q_vals)
+        return action
 
     def update(
-        self, obs: Any, action, reward: float, terminated: bool, next_obs: Any
+        self, obs, action, reward, terminated, next_obs
     ) -> None:
         """Update Q-values from a transition or batch of transitions.
         
@@ -313,51 +151,35 @@ class QLearningRacecarAgent(RacecarAgent):
         """
         if self.batch_size == 1:
             # Single transition update
-            state = self.discretizer(obs)
-            next_state = self.discretizer(next_obs)
-
-            future_q_value = (not terminated) * np.max(self.q_values[next_state])
-            flat_action = self._action_to_flat_index(action)
-            target = reward + self.discount_factor * future_q_value
-            td_error = target - self.q_values[state][flat_action]
-
-            self.q_values[state][flat_action] = (
-                self.q_values[state][flat_action] + self.lr * td_error
-            )
-            self.training_error.append(td_error)
-        else:
-            # Batch update: expect tuples/lists of length batch_size
-            try:
-                obs_batch = list(obs) if not isinstance(obs, list) else obs
-                next_obs_batch = list(next_obs) if not isinstance(next_obs, list) else next_obs
-                action_batch = list(action) if not isinstance(action, list) else action
-                # For reward and terminated, handle scalar or iterable
-                if isinstance(reward, (list, tuple)):
-                    reward_batch = list(reward)
-                else:
-                    # single scalar passed; replicate for batch
-                    reward_batch = [float(reward)] * self.batch_size
-                if isinstance(terminated, (list, tuple)):
-                    terminated_batch = list(terminated)
-                else:
-                    terminated_batch = [bool(terminated)] * self.batch_size
-            except Exception as e:
-                raise ValueError("For batch updates, obs/action/next_obs/reward/terminated must be tuples or lists") from e
-
-            # Process each transition in the batch
-            for o, a, r, term, no in zip(obs_batch, action_batch, reward_batch, terminated_batch, next_obs_batch):
-                state = self.discretizer(o)
-                next_state = self.discretizer(no)
-
-                future_q_value = (not term) * np.max(self.q_values[next_state])
-                flat_action = self._action_to_flat_index(a)
-                target = float(r) + self.discount_factor * future_q_value
-                td_error = target - self.q_values[state][flat_action]
-
-                self.q_values[state][flat_action] = (
-                    self.q_values[state][flat_action] + self.lr * td_error
+            self._update_single(obs, action, reward, terminated, next_obs)
+        elif self.batch_size > 1:
+            # Batch update
+            for i in range(self.batch_size):
+                self._update_single(
+                    obs[i], action[i], reward[i], terminated[i], next_obs[i]
                 )
-                self.training_error.append(td_error)
+
+    def _update_single(
+        self, obs: Any, action: Any, reward: float, terminated: bool, next_obs: Any
+    ) -> None:
+        """Update Q-values from a single transition."""
+        state = obs
+        next_state = next_obs
+
+        # Current Q-value
+        current_q = self.q_values[state][action]
+
+        # Compute TD target
+        if terminated:
+            td_target = reward
+        else:
+            td_target = reward + self.discount_factor * np.max(self.q_values[next_state])
+
+        # TD error
+        td_error = td_target - current_q
+
+        # Q-value update
+        self.q_values[state][action] = current_q + self.lr * td_error
 
     def save(self, path: str) -> None:
         """Save Q-table and agent parameters to disk."""
@@ -378,19 +200,7 @@ class QLearningRacecarAgent(RacecarAgent):
             payload = pickle.load(f)
         # Replace q_values with a defaultdict again, capture action count safely
         qdict = payload.get("q_values", {})
-        # Recompute action mapping from current env action space using helper
-        try:
-            # attempt to (re)setup mapping; this will raise if the action space is not supported
-            self._setup_action_space()
-            if self._flat_action_n is None:
-                raise ValueError()
-        except Exception:
-            raise ValueError("Environment action space must be discrete or Dict of Discrete to load Q-values")
-
-        # self._flat_action_n is guaranteed to be set by _setup_action_space above
-        assert self._flat_action_n is not None
-        flat_n = int(self._flat_action_n)
-        self.q_values = defaultdict(lambda: np.zeros(flat_n))
+        self.q_values = defaultdict(lambda: np.zeros(self.num_actions))
         # copy saved entries
         for k, v in qdict.items():
             self.q_values[k] = np.array(v, dtype=float)
@@ -401,4 +211,3 @@ class QLearningRacecarAgent(RacecarAgent):
         self.epsilon = payload.get("epsilon", self.epsilon)
         self.epsilon_decay = payload.get("epsilon_decay", self.epsilon_decay)
         self.final_epsilon = payload.get("final_epsilon", self.final_epsilon)
-        self.training_error = payload.get("training_error", [])

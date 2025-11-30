@@ -4,7 +4,7 @@ from gymnasium.spaces import Discrete, Dict, Box, MultiDiscrete, Tuple
 from typing import Optional, SupportsFloat
 
 
-class DiscreteActionWrapper(gym.ActionWrapper):
+class DiscreteAction(gym.ActionWrapper):
     """Wrap a continuous action space and present a discrete action space.
     """
 
@@ -52,35 +52,34 @@ class DiscreteActionWrapper(gym.ActionWrapper):
             'steering': np.array(steering_value, dtype=np.float64),
         }
     
-
-class VectorizedDiscreteActionWrapper(gym.ActionWrapper):
-    """Wrap a continuous action space and present a discrete action space in a vectorized environment.
-        Uses DiscreteActionWrapper for each individual environment.
+class FlattenAction(gym.ActionWrapper):
+    """Wrap a discrete action space and present a flattened discrete action space.
     """
-    def __init__(self, envs, num_bins_motor: int = 3, num_bins_steering: int = 5):
-        super().__init__(envs)
-        self.env = envs
-        self.num_envs = envs.num_envs
-        self.num_bins_motor = num_bins_motor
-        self.num_bins_steering = num_bins_steering
-        self.wrapper = DiscreteActionWrapper(self.env.single_env, num_bins_motor, num_bins_steering)
-        self.single_env = self.wrapper
-        # Action space consisting of all actions from individual wrappers
-        self.action_space = Tuple([self.wrapper.action_space for _ in range(self.num_envs)])
 
-    def action(self, action) -> Tuple:
-        """Convert vectorized discrete actions to continuous actions for each environment.
+    def __init__(self, env):
+        super().__init__(env)
+        if not isinstance(env.action_space, Dict):
+            raise ValueError("Expected action space to be of type gym.spaces.Dict")
+        motor_space = env.action_space.spaces.get('motor', None)
+        steering_space = env.action_space.spaces.get('steering', None)
+        if not isinstance(motor_space, Discrete) or not isinstance(steering_space, Discrete):
+            raise ValueError("Expected 'motor' and 'steering' action spaces to be of type gym.spaces.Discrete")
+        self.num_bins_motor = motor_space.n
+        self.num_bins_steering = steering_space.n
+        self.action_space = Discrete(self.num_bins_motor * self.num_bins_steering)
+
+    def action(self, action) -> dict:
+        """Convert a flattened discrete action index to the environment's discrete action dict.
         """
-        continuous_actions = []
-        for i in range(self.num_envs):
-            continuous_action = self.wrapper.action(action[i])
-            continuous_actions.append(continuous_action)
-        return Tuple(continuous_actions)
+        action_index = int(action)
+        motor_index = action_index // self.num_bins_steering
+        steering_index = action_index % self.num_bins_steering
+        return {
+            'motor': np.int64(motor_index),
+            'steering': np.int64(steering_index),
+        }
     
-    def step(self, action):
-        return self.env.step(action)
-        
-class DiscretizeObservationWrapper(gym.ObservationWrapper):
+class DiscretizeObservation(gym.ObservationWrapper):
     """
     Wrap a continuous observation space and present a discrete observation space.
     """
@@ -94,7 +93,7 @@ class DiscretizeObservationWrapper(gym.ObservationWrapper):
         """
         super().__init__(env)
         acceleration__min, acceleration_max = 0, 100.0
-        velocity_min, velocity_max = 0, 5.0
+        velocity_min, velocity_max = 0, 2.0
         if num_acceleration_bins is None:
             self.acceleration_bins = None
         else:
@@ -110,11 +109,11 @@ class DiscretizeObservationWrapper(gym.ObservationWrapper):
                 continue
             if key == 'lidar':
                 num_lidar_rays = space.shape[0]
-                new_obs_space[key] = MultiDiscrete([len(self.lidar_bins) - 1] * num_lidar_rays)
+                new_obs_space[key] = MultiDiscrete([len(self.lidar_bins)] * num_lidar_rays)
             elif key == 'velocity':
-                new_obs_space[key] = Discrete(1) # One value representing discretized velocity
+                new_obs_space[key] = Discrete(len(self.velocity_bins))  # One value representing discretized velocity
             elif key == 'acceleration' and self.acceleration_bins is not None:
-                new_obs_space[key] = Discrete(1) # One value representing discretized acceleration
+                new_obs_space[key] = Discrete(len(self.acceleration_bins))  # One value representing discretized acceleration
             else:
                 # new_obs_space[key] = space
                 continue # Do not include other observation components
@@ -140,99 +139,77 @@ class DiscretizeObservationWrapper(gym.ObservationWrapper):
                 # new_obs[key] = value
                 continue # Do not include other observation components
         return new_obs
-
-class VectorizedDiscretizeObservationWrapper(gym.ObservationWrapper):
-    """
-    Wrap a continuous observation space and present a discrete observation space in a vectorized environment.
-    Uses DiscretizeObservationWrapper for each individual environment.
-    """
-
-    def __init__(self, envs, lidar_bins: list = [0.0, 2.5, 5.0], num_velocity_bins: int = 10, num_acceleration_bins: Optional[int] = 3):
-        """Initialize the discretization wrapper.
-        Args:
-            envs: The vectorized environment to wrap.
-            num_lidar_bins: Number of discrete bins for lidar distance readings.
-            lidar_threshold: Maximum distance for lidar readings.
-        """
-        super().__init__(envs)
-        self.envs = envs
-        self.num_envs = envs.num_envs
-        self.wrapper = DiscretizeObservationWrapper(self.env.single_env, lidar_bins, num_velocity_bins, num_acceleration_bins)
-        self.single_env = self.wrapper
-        self.observation_space = Tuple([self.wrapper.observation_space for _ in range(self.num_envs)])
-
-    def observation(self, observation: Tuple) -> Tuple:
-        """Convert vectorized observations to discrete observations for each environment.
-        """
-        discrete_observations = []
-        for i in range(self.num_envs):
-            discrete_obs = self.wrapper.observation(observation[i])
-            discrete_observations.append(discrete_obs)
-        return Tuple(discrete_observations)
     
-    def step(self, action):
-        return self.envs.step(action)
-
-    def reset(self, **kwargs):
-        return self.envs.reset(**kwargs)
-
-
-
-class VectorizedRecordEpisodeStatistics(gym.wrappers.RecordEpisodeStatistics):
-    """
-    Vectorized version of RecordEpisodeStatistics wrapper.
-    Records episode statistics (return, length) for each environment in a vectorized env.
+class FlattenObservation(gym.ObservationWrapper):
+    """Wrap a discrete observation space and present a flattened discrete observation space.
     """
 
-    def __init__(self, env, buffer_length: int = 100):
-        super().__init__(env, buffer_length)
-        self.num_envs = env.num_envs
-        self.single_env = env.single_env
-        self.episode_returns = np.zeros(self.num_envs, dtype=np.float32)
-        self.episode_lengths = np.zeros(self.num_envs, dtype=np.int32)
-
-    def step(self, action):
-        observations, rewards, terminations, truncations, infos = self.env.step(action)
-        self.episode_returns += rewards
-        self.episode_lengths += 1
-
-        for i in range(self.num_envs):
-            if terminations[i] or truncations[i]:
-                info = infos[i]
-                info['episode'] = {
-                    'r': self.episode_returns[i],
-                    'l': self.episode_lengths[i],
-                }
-                self.returns.append(self.episode_returns[i])
-                self.lengths.append(self.episode_lengths[i])
-                self.episode_returns[i] = 0.0
-                self.episode_lengths[i] = 0
-
-        return observations, rewards, terminations, truncations, infos
-
-class RewardWrapper(gym.RewardWrapper):
-    """
-    Wrap the reward to modify it.
-    """
-
-    def __init__(self, env, crash_penalty: float = -100.0, living_penalty: float = -1.0):
-        """Initialize the reward wrapper.
-        Args:
-            env: The environment to wrap.
-            crash_penalty: Penalty to apply on crash (termination).
-        """
+    def __init__(self, env):
         super().__init__(env)
-        self.crash_penalty = crash_penalty
-        self.living_penalty = living_penalty
+        if not isinstance(env.observation_space, Dict):
+            raise ValueError("Expected observation space to be of type gym.spaces.Dict")
+        self.obs_spaces = env.observation_space.spaces
+        self.obs_sizes = []
+        for key, space in self.obs_spaces.items():
+            if isinstance(space, Discrete):
+                self.obs_sizes.append(space.n)
+            elif isinstance(space, MultiDiscrete):
+                self.obs_sizes.append(int(np.prod(space.nvec)))
+            else:
+                raise ValueError("Expected observation subspaces to be of type Discrete or MultiDiscrete")
+        self.total_size = int(np.prod(self.obs_sizes))
+        self.observation_space = Discrete(self.total_size)
 
-    def reward(self, reward: SupportsFloat) -> float:
-        return float(reward)
+    def observation(self, observation: dict) -> int:
+        """Convert a discrete observation dict to a flattened discrete observation index.
+        """
+        flat_index = 0
+        multiplier = 1
+        for i, (key, space) in enumerate(self.obs_spaces.items()):
+            if isinstance(space, Discrete):
+                value = int(observation[key])
+                flat_index += value * multiplier
+                multiplier *= space.n
+            elif isinstance(space, MultiDiscrete):
+                value = observation[key]
+                # Convert multi-discrete value to flat index
+                sub_index = 0
+                sub_multiplier = 1
+                for j in range(len(space.nvec)):
+                    sub_index += value[j] * sub_multiplier
+                    sub_multiplier *= space.nvec[j]
+                flat_index += sub_index * multiplier
+                multiplier *= int(np.prod(space.nvec))
+        return flat_index
+    
+class FrameSkipping(gym.Wrapper):
+    """Wrapper to skip frames in the environment.
+    Makes the agent act only every 'skip' steps.
+    Actions are "sticky" for the skipped frames, i.e., the last action is repeated.
+
+    Makes the agent act more slowly
+    """
+
+    def __init__(self, env, skip: int = 4):
+        super().__init__(env)
+        self.skip = skip
+        self.last_action = None
 
     def step(self, action):
-        obs, reward, terminated, truncated, info = self.env.step(action)
-        # Ensure reward is a concrete float before arithmetic to satisfy type checkers
-        reward = float(reward)
-        if terminated:
-            reward = reward + float(self.crash_penalty)
-        reward = reward + float(self.living_penalty)
-        return obs, reward, terminated, truncated, info
+        total_reward = 0.0
+        done = False
+        info = {}
+        self.last_action = action
+        for _ in range(self.skip):
+            obs, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+            done = terminated or truncated
+            # Add info 
+            if done:
+                break
+        return obs, total_reward, terminated, truncated, info
+    
+    def reset(self, **kwargs):
+        self.last_action = None
+        return self.env.reset(**kwargs)
+    
