@@ -12,10 +12,10 @@ def train(n_episodes: int = 500, render_mode: Optional[str] = None, track: str =
     # Training hyperparameters
     learning_rate = 0.01        # How fast to learn (higher = faster but less stable)
     milestone_num = 10       # Print milestone stats every N episodes
-    start_epsilon = 0.5        # Start with full exploration        
+    start_epsilon = 1        # Start with full exploration        
     epsilon_decay = start_epsilon/(n_episodes/2)  # Reduce exploration over time
     final_epsilon = 0.05         # Always keep some exploration
-    gamma = 0.999                 # Discount factor for future rewards
+    gamma = 0.99                 # Discount factor for future rewards
     lidar_bins = [0.0, 2.5, 5.0]
     num_velocity_bins = 3
     num_acceleration_bins = 0  # No acceleration bins
@@ -48,8 +48,6 @@ def train(n_episodes: int = 500, render_mode: Optional[str] = None, track: str =
         final_epsilon=final_epsilon,
         discount_factor=gamma
     )
-    # Optionally load a pre-trained model to continue training
-    agent.load('models/circle_aggresive_v1.pkl')
 
     pbar = tqdm(total=n_episodes)
 
@@ -60,13 +58,16 @@ def train(n_episodes: int = 500, render_mode: Optional[str] = None, track: str =
         done = False
 
         obs, info = env.reset(options=dict(mode='grid'))
-
         while not done:
             action = agent.get_action(obs)
             next_obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             if done:
-                progress.append(min(info['progress']+info['lap']-1,1))
+                if info['lap'] > 1:
+                    progress.append(1.0)
+                    time_to_finish.append(info['time'])
+                else:
+                    progress.append(info['progress'])
             agent.update(obs, action, float(reward), done, next_obs)
             obs = next_obs
             # Log episode statistics (available in info after episode ends)
@@ -89,6 +90,11 @@ def train(n_episodes: int = 500, render_mode: Optional[str] = None, track: str =
                     if recent_progress:
                         avg_progress = sum(recent_progress) / len(recent_progress)
                         print(f"  -> Average progress over last {milestone_num} episodes: {avg_progress:.4f}")
+                    if time_to_finish:
+                        recent_times = time_to_finish[-milestone_num:]
+                        if recent_times:
+                            avg_time = sum(recent_times) / len(recent_times)
+                            print(f"  -> Average time to finish over last {len(recent_times)} completed episodes: {avg_time:.2f}s")
         # Decay epsilon
         agent.decay_epsilon()
         pbar.update(1)
