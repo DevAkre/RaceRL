@@ -5,7 +5,11 @@ import pickle
 from typing import Any, Callable, Hashable, Optional, Tuple, Union
 from typing import Dict as TypingDict, List
 import math
+from enum import Enum
 
+class RaceCarAgentType(Enum):
+    QLearningRacecarAgent = 'q_learning'
+    DoubleQLearningRaceCarAgent = 'double_q_learning'
 
 class RacecarAgent:
     """Base class for racecar agents.
@@ -142,10 +146,10 @@ class QLearningRacecarAgent(RacecarAgent):
         self, obs, action, reward, terminated, next_obs
     ) -> None:
         """Update Q-values from a transition or batch of transitions.
-        
+
         For batch_size=1 (default): expects single values for obs, action, reward, terminated, next_obs.
         For batch_size>1: expects obs and next_obs as tuples/lists of observations (dicts),
-                         action as tuple/list of actions (dicts), 
+                         action as tuple/list of actions (dicts),
                          reward as tuple/list of floats,
                          terminated as tuple/list of bools.
         """
@@ -181,8 +185,8 @@ class QLearningRacecarAgent(RacecarAgent):
         # Q-value update
         self.q_values[state][action] = current_q + self.lr * td_error
 
-    def save(self, path: str) -> None:
-        """Save Q-table and agent parameters to disk."""
+    def make_payload(self) -> TypingDict[str, Any]:
+        """Create a payload dictionary for saving the agent state."""
         payload = {
             "q_values": dict(self.q_values),
             "lr": self.lr,
@@ -191,13 +195,16 @@ class QLearningRacecarAgent(RacecarAgent):
             "epsilon_decay": self.epsilon_decay,
             "final_epsilon": self.final_epsilon
         }
+        return payload
+
+    def save(self, path: str) -> None:
+        """Save Q-table and agent parameters to disk."""
+        payload = self.make_payload()
         with open(path, "wb") as f:
             pickle.dump(payload, f)
 
-    def load(self, path: str) -> None:
-        """Load Q-table and parameters from disk."""
-        with open(path, "rb") as f:
-            payload = pickle.load(f)
+    def load_payload(self, payload):
+        """Load Q-table and parameters from a given payload dictionary."""
         # Replace q_values with a defaultdict again, capture action count safely
         qdict = payload.get("q_values", {})
         self.q_values = defaultdict(lambda: np.zeros(self.num_actions))
@@ -211,3 +218,90 @@ class QLearningRacecarAgent(RacecarAgent):
         self.epsilon = payload.get("epsilon", self.epsilon)
         self.epsilon_decay = payload.get("epsilon_decay", self.epsilon_decay)
         self.final_epsilon = payload.get("final_epsilon", self.final_epsilon)
+
+
+    def load(self, path: str) -> None:
+        """Load Q-table and parameters from disk."""
+        with open(path, "rb") as f:
+            payload = pickle.load(f)
+        self.load_payload(payload)
+
+class DoubleQLearningRaceCarAgent(QLearningRacecarAgent):
+    """Tabular Double Q-learning agent for environments with discrete actions.
+
+    This agent uses two defaultdicts to hold Q-values and supports epsilon-greedy
+    action selection. Supports both single and batch updates.
+
+    Inherits from QLearningRacecarAgent and overrides update method.
+    """
+
+    def __init__(
+        self,
+        env: gym.Env,
+        learning_rate: float = 0.1,
+        initial_epsilon: float = 1.0,
+        epsilon_decay: float = 1e-3,
+        final_epsilon: float = 0.1,
+        discount_factor: float = 0.95,
+        batch_size: int = 1
+    ) -> None:
+        super().__init__(
+            env,
+            learning_rate=learning_rate,
+            initial_epsilon=initial_epsilon,
+            epsilon_decay=epsilon_decay,
+            final_epsilon=final_epsilon,
+            discount_factor=discount_factor,
+            batch_size=batch_size
+        )
+        # Second Q-table for Double Q-learning
+        self.q_values_b = defaultdict(lambda: np.zeros(self.num_actions))
+
+    def _update_single(
+        self, obs: Any, action: Any, reward: float, terminated: bool, next_obs: Any
+    ) -> None:
+        """Update Q-values from a single transition using Double Q-learning."""
+        state = obs
+        next_state = next_obs
+
+        # Randomly choose which Q-table to update
+        if np.random.rand() < 0.5:
+            # Update Q-table A
+            current_q = self.q_values[state][action]
+            if terminated:
+                td_target = reward
+            else:
+                # Action selection from Q-table A
+                best_next_action = np.argmax(self.q_values[next_state])
+                # Evaluation from Q-table B
+                td_target = reward + self.discount_factor * self.q_values_b[next_state][best_next_action]
+            td_error = td_target - current_q
+            self.q_values[state][action] = current_q + self.lr * td_error
+        else:
+            # Update Q-table B
+            current_q = self.q_values_b[state][action]
+            if terminated:
+                td_target = reward
+            else:
+                # Action selection from Q-table B
+                best_next_action = np.argmax(self.q_values_b[next_state])
+                # Evaluation from Q-table A
+                td_target = reward + self.discount_factor * self.q_values[next_state][best_next_action]
+            td_error = td_target - current_q
+            self.q_values_b[state][action] = current_q + self.lr * td_error
+
+    def make_payload(self) -> TypingDict[str, Any]:
+        """Create a payload dictionary for saving the agent state."""
+        payload = super().make_payload()
+        payload["q_values_b"] = dict(self.q_values_b)
+        return payload
+    
+    def load_payload(self, payload):
+        """Load Q-tables and parameters from a given payload dictionary."""
+        super().load_payload(payload)
+        qdict_b = payload.get("q_values_b", {})
+        self.q_values_b = defaultdict(lambda: np.zeros(self.num_actions))
+        for k, v in qdict_b.items():
+            self.q_values_b[k] = np.array(v, dtype=float)
+
+
