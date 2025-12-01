@@ -42,7 +42,7 @@ class RacecarAgent:
         if not self.set_up_action_space():
             raise ValueError("Environment action space must be discrete")
         self.num_states = None  # To be set by concrete agents if needed
-    
+
     def set_up_action_space(self) -> bool:
         """Check if the environment's action space is supported (Discrete or Dict of Discrete)."""
         action_space = self.env.action_space
@@ -114,7 +114,7 @@ class QLearningRacecarAgent(RacecarAgent):
         # Use captured action_n inside the defaultdict to avoid static type issues
         self.q_values = defaultdict(lambda: np.zeros(self.num_actions))
         self.action_space = gym.spaces.Discrete(self.num_actions)
-    
+
     def get_action(self, obs: Any, explore: bool = True) -> Any:
         """Return an action for the given observation using epsilon-greedy policy.
 
@@ -131,7 +131,7 @@ class QLearningRacecarAgent(RacecarAgent):
             for i in range(self.batch_size):
                 actions[i] = self._get_action_single(obs[i], explore)
             return actions
-    
+
     def _get_action_single(self, obs: Any, explore: bool = True) -> Any:
         if explore and np.random.rand() < self.epsilon:
             # Explore: random action
@@ -278,6 +278,7 @@ class DoubleQLearningRaceCarAgent(QLearningRacecarAgent):
             td_error = td_target - current_q
             self.q_values[state][action] = current_q + self.lr * td_error
         else:
+<<<<<<< HEAD
             # Update Q-table B
             current_q = self.q_values_b[state][action]
             if terminated:
@@ -289,13 +290,105 @@ class DoubleQLearningRaceCarAgent(QLearningRacecarAgent):
                 td_target = reward + self.discount_factor * self.q_values[next_state][best_next_action]
             td_error = td_target - current_q
             self.q_values_b[state][action] = current_q + self.lr * td_error
+=======
+            # Batch update: expect tuples/lists of length batch_size
+            try:
+                obs_batch = list(obs) if not isinstance(obs, list) else obs
+                next_obs_batch = list(next_obs) if not isinstance(next_obs, list) else next_obs
+                action_batch = list(action) if not isinstance(action, list) else action
+                # For reward and terminated, handle scalar or iterable
+                if isinstance(reward, (list, tuple)):
+                    reward_batch = list(reward)
+                else:
+                    # single scalar passed; replicate for batch
+                    reward_batch = [float(reward)] * self.batch_size
+                if isinstance(terminated, (list, tuple)):
+                    terminated_batch = list(terminated)
+                else:
+                    terminated_batch = [bool(terminated)] * self.batch_size
+            except Exception as e:
+                raise ValueError("For batch updates, obs/action/next_obs/reward/terminated must be tuples or lists") from e
+            # Process each transition in the batch
+
+            for o, a, r, term, no in zip(obs_batch, action_batch, reward_batch, terminated_batch, next_obs_batch):
+                state = self.discretizer(o)
+                next_state = self.discretizer(no)
+
+                if np.random.random() < 0.5:
+                    # Update Q1
+                    best_next_action = int(np.argmax(self.q1_values[next_state]))
+                    future_q_value = (not term) * self.q2_values[next_state][best_next_action]
+                    flat_action = self._action_to_flat_index(a)
+                    target = float(r) + self.discount_factor * future_q_value
+                    td_error = target - self.q1_values[state][flat_action]
+
+                    self.q1_values[state][flat_action] += self.lr * td_error
+                else:
+                    # Update Q2
+                    best_next_action = int(np.argmax(self.q2_values[next_state]))
+                    future_q_value = (not term) * self.q1_values[next_state][best_next_action]
+                    flat_action = self._action_to_flat_index(a)
+                    target = float(r) + self.discount_factor * future_q_value
+                    td_error = target - self.q2_values[state][flat_action]
+
+                    self.q2_values[state][flat_action] += self.lr * td_error
+
+                self.training_error.append(td_error)
+
+    def save(self, path: str) -> None:
+        """Save Q-tables and agent parameters to disk."""
+        payload = {
+            "q1_values": dict(self.q1_values),
+            "q2_values": dict(self.q2_values),
+            "lr": self.lr,
+            "discount_factor": self.discount_factor,
+            "epsilon": self.epsilon,
+            "epsilon_decay": self.epsilon_decay,
+            "final_epsilon": self.final_epsilon
+        }
+        with open(path, "wb") as f:
+            pickle.dump(payload, f)
+
+    def load(self, path: str) -> None:
+        """Load Q-tables and parameters from disk."""
+        with open(path, "rb") as f:
+            payload = pickle.load(f)
+        # Replace q_values with defaultdicts again, capture action count safely
+        q1dict = payload.get("q1_values", {})
+        q2dict = payload.get("q2_values", {})
+        # Recompute action mapping from current env action space using helper
+        try:
+            # attempt to (re)setup mapping; this will raise if the action space is not supported
+            self._setup_action_space()
+            if self._flat_action_n is None:
+                raise ValueError()
+        except Exception:
+            raise ValueError("Environment action space must be discrete or Dict of Discrete to load Q-values")
+        # self._flat_action_n is guaranteed to be set by _setup_action_space above
+        assert self._flat_action_n is not None
+        flat_n = int(self._flat_action_n)
+        self.q1_values = defaultdict(lambda: np.zeros(flat_n))
+        self.q2_values = defaultdict(lambda: np.zeros(flat_n))
+        # copy saved entries
+        for k, v in q1dict.items():
+            self.q1_values[k] = np.array(v, dtype=float)
+        for k, v in q2dict.items():
+            self.q2_values[k] = np.array(v, dtype=float)
+        # restore basic params
+        self.lr = payload.get("lr", self.lr)
+        self.discount_factor = payload.get("discount_factor", self.discount_factor)
+        self.epsilon = payload.get("epsilon", self.epsilon)
+        self.epsilon_decay = payload.get("epsilon_decay", self.epsilon_decay)
+        self.final_epsilon = payload.get("final_epsilon", self.final_epsilon)
+        self.training_error = payload.get("training_error", [])
+
 
     def make_payload(self) -> TypingDict[str, Any]:
         """Create a payload dictionary for saving the agent state."""
         payload = super().make_payload()
         payload["q_values_b"] = dict(self.q_values_b)
         return payload
-    
+
     def load_payload(self, payload):
         """Load Q-tables and parameters from a given payload dictionary."""
         super().load_payload(payload)
