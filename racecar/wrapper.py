@@ -1,7 +1,9 @@
 import gymnasium as gym
+from typing import Optional, SupportsFloat
+from itertools import product
+
 import numpy as np
 from gymnasium.spaces import Discrete, Dict, Box, MultiDiscrete, Tuple
-from typing import Optional, SupportsFloat
 
 
 class DiscreteActionWrapper(gym.ActionWrapper):
@@ -51,7 +53,48 @@ class DiscreteActionWrapper(gym.ActionWrapper):
             'motor': np.array(motor_value, dtype=np.float64),
             'steering': np.array(steering_value, dtype=np.float64),
         }
-    
+
+
+class DQNActionWrapper(gym.ActionWrapper):
+    """Wrap a continuous action space and present a discrete action space.
+    """
+
+    def __init__(self, env, num_bins_motor: int = 3, num_bins_steering: int = 5):
+        super().__init__(env)
+        self.num_bins_motor = num_bins_motor
+        self.num_bins_steering = num_bins_steering
+        allowed_motor_values = np.linspace(-1.0, 1.0, num_bins_motor)
+        allowed_steering_values = np.linspace(-1.0, 1.0, num_bins_steering)
+        self.allowed_actions = [
+           (m, s) for m,s in product(allowed_motor_values,allowed_steering_values)
+        ]
+        # print(f"DiscreteActionWrapper: allowed motor values: {allowed_motor_values}")
+        # print(f"DiscreteActionWrapper: allowed steering values: {allowed_steering_values}")
+        self._bin_size_motor = allowed_motor_values[1] - allowed_motor_values[0]
+        self._bin_size_steering = allowed_steering_values[1] - allowed_steering_values[0]
+        # Present actions as a Dict with separate Discrete entries for motor and steering
+        self.action_space = Dict({
+            'motor': Discrete(num_bins_motor),
+            'steering': Discrete(num_bins_steering),
+        })
+
+
+    def action(self, action:int) -> dict:
+        """
+        Convert a discrete action (dict with 'motor' and 'steering' indices) to
+        the environment's continuous action dict.
+        """
+        if action < 0:
+            action = 0
+        if action >= len(self.allowed_actions):
+            action = len(self.allowed_actions) - 1
+
+
+        motor_value, steering_value = self.allowed_actions[action]
+        return {
+            'motor': np.array(motor_value, dtype=np.float64),
+            'steering': np.array(steering_value, dtype=np.float64),
+        }
 
 class VectorizedDiscreteActionWrapper(gym.ActionWrapper):
     """Wrap a continuous action space and present a discrete action space in a vectorized environment.
@@ -76,10 +119,10 @@ class VectorizedDiscreteActionWrapper(gym.ActionWrapper):
             continuous_action = self.wrapper.action(action[i])
             continuous_actions.append(continuous_action)
         return Tuple(continuous_actions)
-    
+
     def step(self, action):
         return self.env.step(action)
-        
+
 class DiscretizeObservationWrapper(gym.ObservationWrapper):
     """
     Wrap a continuous observation space and present a discrete observation space.
@@ -141,6 +184,75 @@ class DiscretizeObservationWrapper(gym.ObservationWrapper):
                 continue # Do not include other observation components
         return new_obs
 
+
+class DQNObservationWrapper(gym.ObservationWrapper):
+    """
+    Wrap the observation to convert it to a flat numpy array for DQN.
+    """
+
+    def __init__(self, env, use_lidar=True, use_pose=True, use_velocity=True,
+                 use_acceleration=True, normalize=True):
+        """
+        Args:
+            use_lidar: Whether to include lidar data
+            use_pose: Whether to include pose data
+            use_velocity: Whether to include velocity data
+            use_acceleration: Whether to include acceleration data
+            normalize: Whether to normalize the features
+        """
+        super().__init__(env)
+        self.use_lidar = use_lidar
+        self.use_pose = use_pose
+        self.use_velocity = use_velocity
+        self.use_acceleration = use_acceleration
+        self.normalize = normalize
+
+        self.feature_stats = {}
+        self.initialized = False
+
+        old_obs_space = self.env.observation_space
+        if not isinstance(old_obs_space, Dict):
+            raise ValueError("Expected observation space to be of type gym.spaces.Dict")
+        new_obs_space = {}
+        for key, space in old_obs_space.spaces.items():
+            if use_lidar and key == 'lidar':
+                new_obs_space[key] = space
+            elif use_pose and key == 'pose':
+                new_obs_space[key] = space
+            elif use_velocity and key == 'velocity':
+                new_obs_space[key] = space
+            elif use_acceleration and key == 'acceleration':
+                new_obs_space[key] = space
+        self.observation_space = Dict(new_obs_space)
+        self.observation_space_dim = self._get_observation_space_dim()
+
+    def _get_observation_space_dim(self):
+        return sum(
+            [val.shape[0] for val in self.observation_space.values()]
+        )
+
+    def observation(self, state):
+        features = []
+
+        if self.use_pose:
+            features.append(state['pose'])
+
+        if self.use_acceleration:
+            features.append(state['acceleration'])
+
+        if self.use_velocity:
+            features.append(state['velocity'])
+
+        if self.use_lidar:
+            features.append(state['lidar'])
+
+        features = np.concatenate(features, axis=0).astype(np.float32)
+
+        return features
+
+
+
+
 class VectorizedDiscretizeObservationWrapper(gym.ObservationWrapper):
     """
     Wrap a continuous observation space and present a discrete observation space in a vectorized environment.
@@ -169,7 +281,7 @@ class VectorizedDiscretizeObservationWrapper(gym.ObservationWrapper):
             discrete_obs = self.wrapper.observation(observation[i])
             discrete_observations.append(discrete_obs)
         return Tuple(discrete_observations)
-    
+
     def step(self, action):
         return self.envs.step(action)
 

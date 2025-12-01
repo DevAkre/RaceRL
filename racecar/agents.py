@@ -547,6 +547,7 @@ class DoubleQLearningRaceCarAgent(RacecarAgent):
                     self.q2_values[state][flat_action] += self.lr * td_error
 
                 self.training_error.append(td_error)
+
     def save(self, path: str) -> None:
         """Save Q-tables and agent parameters to disk."""
         payload = {

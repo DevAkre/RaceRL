@@ -8,4 +8,3 @@ agents:
     task:
       task_name: maximize_progress
       params: {laps: 1, time_limit: 60.0, terminate_on_collision: True, collision_reward: -100.0, frame_reward: -0.1, progress_reward: 100.0 }
-    
