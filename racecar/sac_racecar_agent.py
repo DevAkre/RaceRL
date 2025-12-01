@@ -3,21 +3,20 @@ import sys
 import argparse
 import numpy as np
 import gymnasium as gym
-import racecar_gym.envs.gym_api
+import racecar_gym.envs
+import pybullet as p
 
-# ------------------- CUSTOM ENV IMPORT -------------------
 # Add RaceRL repo to path (adjust to your local clone)
 sys.path.append("C:/Users/poibo/Documents/RaceRL")
 
 # Import the module that registers all RaceRL environments
-# From the repo, the environments are in 'racecar/envs'
 try:
     import racecar_gym.envs
 except ImportError as e:
     print("Failed to import RaceRL envs. Make sure the path is correct.")
     raise e
 
-# ---------------- Verify environment registration ----------------
+# check for the virtual env
 from gymnasium.envs.registration import registry
 
 def check_env_exists(env_id):
@@ -31,7 +30,7 @@ def check_env_exists(env_id):
     else:
         print(f"Environment '{env_id}' found in registry.")
 
-# ---------------- Wrappers ----------------
+# create wrappers to adjust for gym api and data correctness
 from gymnasium import ObservationWrapper, ActionWrapper, spaces
 
 class FlattenObservation(ObservationWrapper):
@@ -72,8 +71,27 @@ class DictToBox(ActionWrapper):
             pos += size
         return out
 
-# -------------- Helper to adapt env --------------
+# camera to follow racecar
 from stable_baselines3.common.monitor import Monitor
+
+def setup_chase_camera(env, distance=6.0, yaw=50, pitch=-30):
+    """
+    Automatically follow the vehicle in PyBullet GUI.
+    """
+    env = env.unwrapped #get car id
+    if not hasattr(env, "vehicle_id"):
+        return lambda: None  # dummy if no vehicle
+    vehicle_id = env.vehicle_id
+    #real time updates
+    def update_camera():
+        pos, _ = p.getBasePositionAndOrientation(vehicle_id)
+        p.resetDebugVisualizerCamera(
+            cameraDistance=distance,
+            cameraYaw=yaw,
+            cameraPitch=pitch,
+            cameraTargetPosition=pos
+        )
+    return update_camera
 
 def make_adapted_env(env_id="SingleAgentCircle_cw-v0", render_mode=None):
     check_env_exists(env_id)
@@ -96,29 +114,38 @@ def make_adapted_env(env_id="SingleAgentCircle_cw-v0", render_mode=None):
                 highs.extend([1.0]*int(np.prod(sp.shape)))
         env = DictToBox(env, low=np.array(lows, dtype=np.float32), high=np.array(highs, dtype=np.float32))
 
-    env = Monitor(env)
-    return env
+    env = Monitor(env, "logs/", allow_early_resets=True)
 
-# -------------- Training / Playing --------------
+    # Add chase camera for human render
+    update_camera = None
+    if render_mode == "human":
+        update_camera = setup_chase_camera(env)
+
+    return env, update_camera
+
+# training
 from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import CheckpointCallback
 
 def train(env_id, total_timesteps=30000, model_path="models/racecar_sac_model"):
     os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
-    env = make_adapted_env(env_id=env_id, render_mode=None)
+    env, update_camera = make_adapted_env(env_id=env_id, render_mode=None)
     vec_env = DummyVecEnv([lambda: env])
-
+    #init soft actor critic
     model = SAC("MlpPolicy", vec_env, verbose=1)
+    #adjust for every 10k steps
     ckpt_cb = CheckpointCallback(save_freq=10_000, save_path=os.path.dirname(model_path) or "./",
                                  name_prefix=os.path.basename(model_path))
 
     model.learn(total_timesteps=total_timesteps, callback=ckpt_cb)
     model.save(model_path)
+    #models is saved to models folder
     print("Saved model to:", model_path)
 
+#gives live action for the trained model
 def play(env_id, model_path="models/racecar_sac_model"):
-    env = make_adapted_env(env_id=env_id, render_mode="human")
+    env, update_camera = make_adapted_env(env_id=env_id, render_mode="human")
     vec_env = DummyVecEnv([lambda: env])
 
     print("Loading model from", model_path)
@@ -126,6 +153,8 @@ def play(env_id, model_path="models/racecar_sac_model"):
     obs, _ = vec_env.reset()
     done = False
     while True:
+        if update_camera:
+            update_camera()
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, terminated, truncated, info = vec_env.step(action)
         vec_env.render()
@@ -137,7 +166,7 @@ def play(env_id, model_path="models/racecar_sac_model"):
                 break
     print("Episode finished.")
 
-# -------------- CLI --------------
+# options how to run
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["train", "play"], help="train or play")
@@ -146,6 +175,7 @@ if __name__ == "__main__":
     parser.add_argument("--model-path", default="models/racecar_sac_model", help="Where to save/load model")
     args = parser.parse_args()
 
+    #if not train then automatically run play, will crash out no model to run on
     if args.mode == "train":
         train(env_id=args.env, total_timesteps=args.timesteps, model_path=args.model_path)
     else:
