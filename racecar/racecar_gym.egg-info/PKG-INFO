@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: racecar-gym
+Version: 0.1.0
+Summary: Add your description here
+Requires-Python: <3.12,>=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: gymnasium[toy-text]==0.28.1
+Requires-Dist: marimo[mcp]>=0.17.8
+Requires-Dist: matplotlib>=3.8.4
+Requires-Dist: nptyping<2.0
+Requires-Dist: numpy==1.22.3
+Requires-Dist: openai>=2.8.0
+Requires-Dist: pettingzoo==1.22.3
+Requires-Dist: pybullet==3.2.5
+Requires-Dist: scipy>=1.11.4
+Requires-Dist: tqdm>=4.67.1
+Requires-Dist: yamldataclassconfig==1.5.0
+Requires-Dist: racecar_gym@ file:///../../racecar_gym/dist/racecar_gym-0.1.0-py3-none-any.whl

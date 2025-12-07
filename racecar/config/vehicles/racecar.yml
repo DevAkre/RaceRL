@@ -56,8 +56,8 @@ sensors:
       range: 15.0
       min_range: 0.25
       angle_start: -1.57 # Starting angle (radians) 1.5*pi; Angle from the front of the vehicle, positive is clockwise
-      angle: 3.14        # Angle to cover (radians)  
-      debug: True
+      angle: 3.14        # Angle to cover (radians)
+      debug: False
 
   - type: rgb_camera
     name: rgb_camera

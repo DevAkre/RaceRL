@@ -1,0 +1,20 @@
+[project]
+name = "RaceRLRacecar"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "gymnasium[toy-text]==0.28.1",
+    "marimo[mcp]>=0.17.8",
+    "matplotlib>=3.8.4",
+    "nptyping<2.0",
+    "numpy==1.22.3",
+    "openai>=2.8.0",
+    "pettingzoo==1.22.3",
+    "pybullet==3.2.5",
+    "scipy>=1.11.4",
+    "tqdm>=4.67.1",
+    "yamldataclassconfig==1.5.0",
+    "racecar-gym @ file:////Users/apare/learning/roux_ms/reinforcement_learning/racecar_gym/dist/racecar_gym-0.1.1-py3-none-any.whl"
+]

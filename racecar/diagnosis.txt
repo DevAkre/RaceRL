@@ -1,0 +1,89 @@
+
+======================================================================
+Q-VALUE DIAGNOSIS
+======================================================================
+
+Q-value statistics (across 100 states):
+  Mean:  11.0091
+  Std:   4.5156
+  Min:   3.1944
+  Max:   17.4228
+  Range: 14.2284
+
+Per-action Q-value statistics:
+  Action 0 (motor=-1.0, steering=-1.0): mean= 10.861, std= 4.597
+  Action 1 (motor=-1.0, steering=-0.7): mean= 11.083, std= 4.605
+  Action 2 (motor=-1.0, steering=-0.3): mean= 11.019, std= 4.599
+  Action 3 (motor=-1.0, steering=+0.0): mean= 10.868, std= 4.504
+  Action 4 (motor=-1.0, steering=+0.3): mean= 10.903, std= 4.477
+  Action 5 (motor=-1.0, steering=+0.7): mean= 11.062, std= 4.558
+  Action 6 (motor=-1.0, steering=+1.0): mean= 10.774, std= 4.468
+  Action 7 (motor=-0.5, steering=-1.0): mean= 10.808, std= 4.453
+  Action 8 (motor=-0.5, steering=-0.7): mean= 10.876, std= 4.583
+  Action 9 (motor=-0.5, steering=-0.3): mean= 10.868, std= 4.565
+  Action 10 (motor=-0.5, steering=+0.0): mean= 10.948, std= 4.550
+  Action 11 (motor=-0.5, steering=+0.3): mean= 10.789, std= 4.526
+  Action 12 (motor=-0.5, steering=+0.7): mean= 10.935, std= 4.570
+  Action 13 (motor=-0.5, steering=+1.0): mean= 10.937, std= 4.526
+  Action 14 (motor=+0.0, steering=-1.0): mean= 10.690, std= 4.409
+  Action 15 (motor=+0.0, steering=-0.7): mean= 10.744, std= 4.515
+  Action 16 (motor=+0.0, steering=-0.3): mean= 10.913, std= 4.535
+  Action 17 (motor=+0.0, steering=+0.0): mean= 10.863, std= 4.547
+  Action 18 (motor=+0.0, steering=+0.3): mean= 10.731, std= 4.434
+  Action 19 (motor=+0.0, steering=+0.7): mean= 10.788, std= 4.428
+  Action 20 (motor=+0.0, steering=+1.0): mean= 10.738, std= 4.468
+  Action 21 (motor=+0.5, steering=-1.0): mean= 11.076, std= 4.523
+  Action 22 (motor=+0.5, steering=-0.7): mean= 11.082, std= 4.493
+  Action 23 (motor=+0.5, steering=-0.3): mean= 11.047, std= 4.524
+  Action 24 (motor=+0.5, steering=+0.0): mean= 11.166, std= 4.537
+  Action 25 (motor=+0.5, steering=+0.3): mean= 11.040, std= 4.443
+  Action 26 (motor=+0.5, steering=+0.7): mean= 11.101, std= 4.486
+  Action 27 (motor=+0.5, steering=+1.0): mean= 11.049, std= 4.442
+  Action 28 (motor=+1.0, steering=-1.0): mean= 11.235, std= 4.500
+  Action 29 (motor=+1.0, steering=-0.7): mean= 11.337, std= 4.513
+  Action 30 (motor=+1.0, steering=-0.3): mean= 11.382, std= 4.509
+  Action 31 (motor=+1.0, steering=+0.0): mean= 11.360, std= 4.505
+  Action 32 (motor=+1.0, steering=+0.3): mean= 11.480, std= 4.509
+  Action 33 (motor=+1.0, steering=+0.7): mean= 11.359, std= 4.449
+  Action 34 (motor=+1.0, steering=+1.0): mean= 11.408, std= 4.502
+
+✓ Q-values show reasonable variance.
+
+Action preference:
+  Best action: 32
+  Q-value differences from best:
+    Action 0: 0.6182
+    Action 1: 0.3970
+    Action 2: 0.4610
+    Action 3: 0.6116
+    Action 4: 0.5771
+    Action 5: 0.4175
+    Action 6: 0.7058
+    Action 7: 0.6715
+    Action 8: 0.6035
+    Action 9: 0.6113
+    Action 10: 0.5315
+    Action 11: 0.6908
+    Action 12: 0.5449
+    Action 13: 0.5424
+    Action 14: 0.7892
+    Action 15: 0.7359
+    Action 16: 0.5671
+    Action 17: 0.6171
+    Action 18: 0.7491
+    Action 19: 0.6915
+    Action 20: 0.7414
+    Action 21: 0.4039
+    Action 22: 0.3978
+    Action 23: 0.4330
+    Action 24: 0.3136
+    Action 25: 0.4392
+    Action 26: 0.3786
+    Action 27: 0.4306
+    Action 28: 0.2449
+    Action 29: 0.1428
+    Action 30: 0.0973
+    Action 31: 0.1201
+    Action 32: 0.0000
+    Action 33: 0.1210
+    Action 34: 0.0713
