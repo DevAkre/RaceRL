@@ -10,6 +10,7 @@ import imageio
 # Add RaceRL repo to path
 sys.path.append("C:/Users/poibo/Documents/RaceRL")
 
+# Verify RaceRL registrations
 from gymnasium.envs.registration import registry
 
 def check_env_exists(env_id):
@@ -22,10 +23,7 @@ def check_env_exists(env_id):
     else:
         print(f"Environment '{env_id}' found in registry.")
 
-
-# ====================================================================
-# WRAPPERS
-# ====================================================================
+# Wrappers
 from gymnasium import ObservationWrapper, ActionWrapper, spaces
 
 class FlattenObservation(ObservationWrapper):
@@ -33,10 +31,8 @@ class FlattenObservation(ObservationWrapper):
         super().__init__(env)
         if not isinstance(env.observation_space, spaces.Dict):
             raise ValueError("FlattenObservation expects Dict obs space")
-
         self.obs_keys = list(env.observation_space.spaces.keys())
         total_dim = int(sum(np.prod(env.observation_space.spaces[k].shape) for k in self.obs_keys))
-
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(total_dim,), dtype=np.float32
         )
@@ -48,7 +44,6 @@ class FlattenObservation(ObservationWrapper):
 class DictToBox(ActionWrapper):
     def __init__(self, env, low=None, high=None):
         super().__init__(env)
-
         if isinstance(env.action_space, spaces.Dict):
             n_actions = sum(int(np.prod(sp.shape)) for sp in env.action_space.spaces.values())
 
@@ -77,9 +72,7 @@ class DictToBox(ActionWrapper):
         return out
 
 
-# ====================================================================
-# CAMERA + ENV CONSTRUCTION
-# ====================================================================
+# Monitor and chase camera
 from stable_baselines3.common.monitor import Monitor
 
 def setup_chase_camera(env, distance=6.0, yaw=50, pitch=-30):
@@ -88,7 +81,6 @@ def setup_chase_camera(env, distance=6.0, yaw=50, pitch=-30):
         return lambda: None
 
     vehicle_id = env.vehicle_id
-
     def update_camera():
         pos, _ = p.getBasePositionAndOrientation(vehicle_id)
         p.resetDebugVisualizerCamera(
@@ -97,20 +89,16 @@ def setup_chase_camera(env, distance=6.0, yaw=50, pitch=-30):
             cameraPitch=pitch,
             cameraTargetPosition=pos,
         )
-
     return update_camera
 
 
 def make_adapted_env(env_id="SingleAgentCircle_cw-v0", render_mode=None):
     check_env_exists(env_id)
-
     env = gym.make(env_id, render_mode=render_mode)
 
-    # Flatten dict observations
     if isinstance(env.observation_space, spaces.Dict):
         env = FlattenObservation(env)
 
-    # Convert dict actions
     if isinstance(env.action_space, spaces.Dict):
         lows, highs = [], []
         for k, sp in env.action_space.spaces.items():
@@ -123,7 +111,6 @@ def make_adapted_env(env_id="SingleAgentCircle_cw-v0", render_mode=None):
                 highs.extend([1] * size)
         env = DictToBox(env, lows, highs)
 
-    # SB3 Monitor modifies API to return OBS ONLY
     env = Monitor(env, "logs/", allow_early_resets=True)
 
     update_camera = None
@@ -132,12 +119,7 @@ def make_adapted_env(env_id="SingleAgentCircle_cw-v0", render_mode=None):
 
     return env, update_camera
 
-
-# ====================================================================
-# VIDEO CALLBACK (FIXED RESET SIGNATURE)
-# ====================================================================
 from stable_baselines3.common.callbacks import BaseCallback
-import warnings
 
 class RaceRLVideoCallback(BaseCallback):
     def __init__(self, vec_env, render_env, video_folder="videos/", freq=5000, length=100000):
@@ -152,32 +134,25 @@ class RaceRLVideoCallback(BaseCallback):
     def _on_step(self):
         if self.num_timesteps % self.freq == 0:
             frames = []
-
-            # SB3 Monitor-wrapped env → reset returns only obs
-            obs = self.render_env.reset()
+            obs, _ = self.render_env.reset()
 
             for t in range(self.length):
                 action, _ = self.model.predict(obs, deterministic=True)
                 obs, reward, done, truncated, info = self.render_env.step(action)
 
                 frame = self.render_env.render()
-                if frame is not None:
-                    frames.append(frame)
+                frames.append(frame)
 
                 if done or truncated:
-                    obs = self.render_env.reset()
+                    obs, _ = self.render_env.reset()
 
             video_path = os.path.join(self.video_folder, f"train_step_{self.num_timesteps}.mp4")
             imageio.mimsave(video_path, frames, fps=30)
-
             print(f"[Video] Saved training video at step {self.num_timesteps}")
 
         return True
 
 
-# ====================================================================
-# TRAIN + PLAY
-# ====================================================================
 from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import CheckpointCallback
@@ -185,9 +160,11 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 def train(env_id, total_timesteps=30000, model_path="models/racecar_sac_model"):
     os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
 
+    # Training uses rgb_array_follow for frame capture
     train_env, _ = make_adapted_env(env_id=env_id, render_mode="rgb_array_follow")
     vec_env = DummyVecEnv([lambda: train_env])
 
+    # A second env for recording only (avoids interfering with training)
     render_env, _ = make_adapted_env(env_id=env_id, render_mode="rgb_array_follow")
 
     model = SAC("MlpPolicy", vec_env, verbose=1)
@@ -208,6 +185,7 @@ def train(env_id, total_timesteps=30000, model_path="models/racecar_sac_model"):
 
     model.learn(total_timesteps=total_timesteps, callback=[ckpt_cb, video_cb])
     model.save(model_path)
+    
     print("Saved model to:", model_path)
 
 
@@ -218,8 +196,7 @@ def play(env_id, model_path="models/racecar_sac_model"):
     print("Loading:", model_path)
     model = SAC.load(model_path, env=vec_env)
 
-    # VecEnv reset → returns ONLY obs
-    obs = vec_env.reset()
+    obs, _ = vec_env.reset()
 
     while True:
         if update_camera:
@@ -227,8 +204,6 @@ def play(env_id, model_path="models/racecar_sac_model"):
 
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, terminated, truncated, info = vec_env.step(action)
-
-        # info is list of dicts, so print info[0]
         print(info[0])
         vec_env.render()
 
@@ -236,9 +211,6 @@ def play(env_id, model_path="models/racecar_sac_model"):
             obs = vec_env.reset()
 
 
-# ====================================================================
-# MAIN
-# ====================================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["train", "play"])
