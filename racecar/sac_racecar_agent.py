@@ -92,10 +92,12 @@ def setup_chase_camera(env, distance=6.0, yaw=50, pitch=-30):
     return update_camera
 
 
-def make_adapted_env(env_id="SingleAgentCircle_cw-v0", render_mode=None):
-    check_env_exists(env_id)
-    env = gym.make(env_id, render_mode=render_mode)
-
+def make_adapted_env(track = 'circle', render_mode=None):
+    env = gym.make(
+            id='SingleAgentRaceEnv-v0', 
+            scenario='config/scenarios/' + track + '.yml',
+            render_mode=render_mode
+    )
     if isinstance(env.observation_space, spaces.Dict):
         env = FlattenObservation(env)
 
@@ -157,15 +159,15 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import CheckpointCallback
 
-def train(env_id, total_timesteps=30000, model_path="models/racecar_sac_model"):
+def train(track, total_timesteps=30000, model_path="models/racecar_sac_model"):
     os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
 
     # Training uses rgb_array_follow for frame capture
-    train_env, _ = make_adapted_env(env_id=env_id, render_mode="rgb_array_follow")
+    train_env, _ = make_adapted_env(track=track, render_mode="rgb_array_follow")
     vec_env = DummyVecEnv([lambda: train_env])
 
     # A second env for recording only (avoids interfering with training)
-    render_env, _ = make_adapted_env(env_id=env_id, render_mode="rgb_array_follow")
+    render_env, _ = make_adapted_env(track=track, render_mode="rgb_array_follow")
 
     model = SAC("MlpPolicy", vec_env, verbose=1)
 
@@ -189,8 +191,8 @@ def train(env_id, total_timesteps=30000, model_path="models/racecar_sac_model"):
     print("Saved model to:", model_path)
 
 
-def play(env_id, model_path="models/racecar_sac_model"):
-    env, update_camera = make_adapted_env(env_id=env_id, render_mode="human")
+def play(track, model_path="models/racecar_sac_model"):
+    env, update_camera = make_adapted_env(track=track, render_mode="human")
     vec_env = DummyVecEnv([lambda: env])
 
     print("Loading:", model_path)
@@ -214,12 +216,12 @@ def play(env_id, model_path="models/racecar_sac_model"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["train", "play"])
-    parser.add_argument("--env", default="SingleAgentCircle_cw-v0")
+    parser.add_argument("--track", default="circle")
     parser.add_argument("--timesteps", type=int, default=30000)
     parser.add_argument("--model-path", default="models/racecar_sac_model")
     args = parser.parse_args()
 
     if args.mode == "train":
-        train(env_id=args.env, total_timesteps=args.timesteps, model_path=args.model_path)
+        train(track=args.track, total_timesteps=args.timesteps, model_path=args.model_path)
     else:
-        play(env_id=args.env, model_path=args.model_path)
+        play(track=args.track, model_path=args.model_path)
