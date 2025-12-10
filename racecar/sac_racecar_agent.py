@@ -94,7 +94,14 @@ def setup_chase_camera(env, distance=6.0, yaw=50, pitch=-30):
 
 def make_adapted_env(env_id="SingleAgentCircle_cw-v0", render_mode=None):
     check_env_exists(env_id)
-    env = gym.make(env_id, render_mode=render_mode)
+
+    default_scenario = r"C:/Users/poibo/Documents/RaceRL/racecar/config/scenarios/circle_cw.yml"
+
+    env = gym.make(
+        env_id,
+        scenario=default_scenario,
+        render_mode=render_mode
+    )
 
     if isinstance(env.observation_space, spaces.Dict):
         env = FlattenObservation(env)
@@ -118,6 +125,7 @@ def make_adapted_env(env_id="SingleAgentCircle_cw-v0", render_mode=None):
         update_camera = setup_chase_camera(env)
 
     return env, update_camera
+
 
 from stable_baselines3.common.callbacks import BaseCallback
 
